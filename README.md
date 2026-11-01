@@ -2,7 +2,7 @@
 
 Asklytics is a full-stack financial analytics application that allows users to ingest financial data from PDFs and images, explore it through an interactive React dashboard, and query financial information using a chat-style interface that returns validated SQL results.
 
-**Repository:** [github.com/yuvraj20gole/Asklytics](https://github.com/yuvraj20gole/Asklytics)
+**Repository & Contributed :** [github.com/yuvraj20gole/Asklytics](https://github.com/yuvraj20gole/Asklytics)
 
 ---
 

@@ -210,36 +210,128 @@ SQL_PE_RATIO = (
 
 
 def period_year_filter_sql(question_lower: str) -> str | None:
-    """SQLite predicate on `period` for an inclusive FY/year range (matches substrings like 2021 / FY2021)."""
-    m = re.search(r"between\s+(\d{4})\s+and\s+(\d{4})", question_lower)
+    """
+    Build a SQLite predicate for financial periods.
+
+    Supported examples:
+      - between 2020 and 2022
+      - 2020-2022
+      - from 2020 to 2022
+      - last 2 years
+      - last 5 years
+      - latest 3 years
+      - past 2 years
+      - previous 5 years
+
+    For relative ranges, the filter uses the latest N available years
+    in financial_facts instead of assuming the current calendar year.
+    """
+    q = (question_lower or "").lower()
+
+    # ------------------------------------------------------------
+    # 1) Explicit year ranges
+    # ------------------------------------------------------------
+    m = re.search(r"between\s+(\d{4})\s+and\s+(\d{4})", q)
+
     if not m:
-        m = re.search(r"\b(\d{4})\s*[-–—]\s*(\d{4})\b", question_lower)
+        m = re.search(r"\b(\d{4})\s*[-–—]\s*(\d{4})\b", q)
+
     if not m:
-        m = re.search(r"from\s+(\d{4})\s+(?:to|through|until)\s+(\d{4})", question_lower)
-    if not m:
-        return None
-    lo, hi = sorted((int(m.group(1)), int(m.group(2))))
-    parts = [f"CAST(period AS TEXT) LIKE '%{y}%'" for y in range(lo, hi + 1)]
-    return "(" + " OR ".join(parts) + ")"
+        m = re.search(
+            r"from\s+(\d{4})\s+(?:to|through|until)\s+(\d{4})",
+            q,
+        )
+
+    if m:
+        lo, hi = sorted((int(m.group(1)), int(m.group(2))))
+
+        parts = [
+            f"CAST(period AS TEXT) LIKE '%{year}%'"
+            for year in range(lo, hi + 1)
+        ]
+
+        return "(" + " OR ".join(parts) + ")"
+
+    # ------------------------------------------------------------
+    # 2) Relative ranges: last/latest/past/previous N years
+    # ------------------------------------------------------------
+    m = re.search(
+        r"\b(?:last|latest|past|previous)\s+(\d+)\s+years?\b",
+        q,
+    )
+
+    if m:
+        n = int(m.group(1))
+
+        if n <= 0:
+            return None
+
+        # Prevent unnecessarily large/generated SQL.
+        n = min(n, 100)
+
+        return f"""
+        CAST(substr(CAST(period AS TEXT), -4) AS INTEGER) IN (
+            SELECT DISTINCT
+                CAST(substr(CAST(period AS TEXT), -4) AS INTEGER)
+            FROM financial_facts
+            WHERE level IN ('consolidated', 'standalone', 'line')
+              AND is_valid = 1
+            ORDER BY CAST(substr(CAST(period AS TEXT), -4) AS INTEGER) DESC
+            LIMIT {n}
+        )
+        """.strip()
+
+    return None
 
 
 def apply_period_filter_to_formula_sql(sql: str, predicate: str) -> str:
-    """Restrict the final `FROM enriched ... ORDER BY period` clause (template formulas only)."""
+    """
+    Add a period predicate to the final `FROM enriched` clause.
+
+    Supports:
+      FROM enriched ORDER BY period
+      FROM enriched WHERE revenue IS NOT NULL
+      FROM enriched) AS x WHERE roe_pct IS NOT NULL
+    """
     marker = "FROM enriched"
     idx = sql.upper().rfind(marker.upper())
+
     if idx == -1:
         return sql
-    tail = sql[idx + len(marker) :]
-    order_at = tail.upper().find("ORDER BY")
-    if order_at == -1:
-        return sql
-    between = tail[:order_at]
-    order_part = tail[order_at:]
-    if " WHERE " in between.upper():
-        new_between = between.rstrip() + " AND (" + predicate + ") "
-    else:
-        new_between = " WHERE (" + predicate + ") " + between.lstrip()
-    return sql[:idx] + marker + new_between + order_part
+
+    tail_start = idx + len(marker)
+    tail = sql[tail_start:]
+    upper_tail = tail.upper()
+
+    # Find the first SQL boundary after FROM enriched.
+    boundary_positions = []
+
+    for token in (" WHERE ", " ORDER BY ", ") AS ", ")", ";"):
+        pos = upper_tail.find(token)
+        if pos != -1:
+            boundary_positions.append(pos)
+
+    boundary = min(boundary_positions) if boundary_positions else len(tail)
+
+    between = tail[:boundary]
+    remainder = tail[boundary:]
+
+    # Existing WHERE directly follows FROM enriched.
+    if remainder.upper().startswith(" WHERE "):
+        return (
+            sql[:tail_start]
+            + between
+            + " WHERE (" + predicate + ") AND "
+            + remainder[7:].lstrip()
+        )
+
+    # No WHERE directly after FROM enriched.
+    return (
+        sql[:tail_start]
+        + between
+        + " WHERE (" + predicate + ") "
+        + remainder
+    )
 
 
 # Pooling / averages over periods (SQLite); use for templated “total revenue”, “average ROE”, etc.

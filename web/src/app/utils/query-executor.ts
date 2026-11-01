@@ -342,7 +342,7 @@ function sqlValuesWideSnapshot(
   headerComments: readonly string[],
   alias: string,
   columnNames: readonly string[],
-  tuples: readonly (readonly (number | null))[],
+  tuples: ReadonlyArray<ReadonlyArray<number | null>>,
 ): string {
   const header = headerComments.map((c) => `-- ${c}`).join("\n");
   if (!columnNames.length || !tuples.length) {
@@ -2021,7 +2021,7 @@ function countBy(data: DataRow[], groupCol: string): Record<string, number> {
   return counts;
 }
 
-function formatTable(results: DataRow[]): DataRow[] {
+function formatTable(results: DataRow[], columns?: string[]): DataRow[] {
   const currency = detectCurrency(results, columns);
   return results.map((row) => {
     const formatted: DataRow = {};

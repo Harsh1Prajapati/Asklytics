@@ -30,10 +30,24 @@ except Exception as exc:  # pragma: no cover
     traceback.print_exc()
     raise exc
 
+from contextlib import asynccontextmanager
+
 configure_logging()
 logger = logging.getLogger(__name__)
 settings = get_settings()
-app = FastAPI(title=settings.app_name)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    migrate_financial_facts_schema(engine)
+    migrate_financial_tables_schema(engine)
+    with SessionLocal() as db:
+        seed_data(db)
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 
 def _parse_cors_origins(raw: str) -> list[str]:
@@ -70,12 +84,3 @@ else:
     )
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    migrate_financial_facts_schema(engine)
-    migrate_financial_tables_schema(engine)
-    with SessionLocal() as db:
-        seed_data(db)

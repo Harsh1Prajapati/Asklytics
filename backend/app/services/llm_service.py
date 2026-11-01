@@ -16,6 +16,7 @@ avoid hallucinated tables/columns and keep behavior stable in production.
 import re
 
 from app.core.config import get_settings
+from app.services.query_planner import QueryPlanner
 from app.services.financial_formulas_sql import (
     SQL_ALL_FINANCIAL_FORMULAS,
     SQL_ASSET_TURNOVER,
@@ -364,13 +365,24 @@ def template_sql_financial_facts(question: str, schema_context: str) -> str | No
 
 
 class LLMService:
-    """Rule-based SQL only (no OpenAI) for /ask."""
+    """Hybrid query service: AI understands language; deterministic SQL computes results."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
+        self.query_planner = QueryPlanner()
 
     def question_to_sql(self, question: str, schema_context: str) -> str:
+        # Fast path: keep existing deterministic routing for questions we already understand.
         templated = template_sql_financial_facts(question, schema_context)
+        if templated:
+            return templated
+
+        # Smart path: AI only normalizes the language; it never writes SQL or calculates numbers.
+        plan = self.query_planner.plan(question)
+        if plan.needs_clarification:
+            raise ValueError(plan.clarification_question or "Please clarify which financial metric you mean.")
+
+        templated = template_sql_financial_facts(plan.normalized_question, schema_context)
         if templated:
             return templated
 

@@ -4,6 +4,9 @@ import { Upload, FileText, Database, Sparkles, ArrowRight, CheckCircle2 } from "
 import { useData } from "../contexts/data-context";
 import { parseFile } from "../utils/file-parser";
 import { useMotionPageEffects } from "../hooks/use-motion-page-effects";
+import { ingestPdf, HttpApiError } from "@/lib/api";
+import { getToken, setToken } from "@/lib/auth";
+import { ingestRowsToUploadedData } from "../utils/ingest-to-uploaded-data";
 
 export function Welcome() {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -76,17 +79,70 @@ export function Welcome() {
     setError(null);
     setIsProcessing(true);
 
-    const result = await parseFile(file);
+    const lower = file.name.toLowerCase();
+    const isPdf = lower.endsWith(".pdf");
 
-    if (result.success) {
-      setData({
-        fileName: file.name,
-        sheets: result.sheets,
-        uploadDate: new Date(),
-      });
-      setIsProcessing(false);
-    } else {
-      setError(result.error || "Failed to process the file.");
+    // PDFs must be processed by the backend because the frontend parser
+    // intentionally does not extract PDF financial tables.
+    if (isPdf) {
+      const token = getToken();
+
+      if (!token) {
+        setError("Please log in again before uploading a PDF.");
+        setIsProcessing(false);
+        return;
+      }
+
+      try {
+        const company =
+          localStorage.getItem("asklytics_company")?.trim() || "WebUpload";
+
+        const ing = await ingestPdf(company, file, token);
+
+        const uploaded = ingestRowsToUploadedData(file.name, ing.rows, {
+          detectedCurrency: ing.detected_currency,
+        });
+
+        setData(uploaded);
+        setIsProcessing(false);
+        return;
+      } catch (err) {
+        if (err instanceof HttpApiError && err.status === 401) {
+          setToken(null);
+          setError("Your session expired. Please log in again and upload the PDF.");
+        } else {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to process the PDF."
+          );
+        }
+
+        setIsProcessing(false);
+        return;
+      }
+    }
+
+    // CSV / Excel / JSON continue to use the existing local parser.
+    try {
+      const result = await parseFile(file);
+
+      if (result.success) {
+        setData({
+          fileName: file.name,
+          sheets: result.sheets,
+          uploadDate: new Date(),
+        });
+      } else {
+        setError(result.error || "Failed to process the file.");
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to process the file."
+      );
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -235,7 +291,7 @@ export function Welcome() {
                       Drop your file here or click to browse
                     </p>
                     <p className="text-muted-foreground text-sm">
-                      Supports CSV, Excel, JSON (Max 50MB)
+                      Supports CSV, Excel, JSON, and PDF (Max 50MB)
                     </p>
                   </div>
                 </div>

@@ -1,4 +1,5 @@
 import { createBrowserRouter } from "react-router";
+import { createElement } from "react";
 import { RootLayout } from "./components/root-layout";
 import { Landing } from "./pages/landing";
 import { Register } from "./pages/register";
@@ -9,6 +10,7 @@ import { Chat } from "./pages/chat";
 import { History } from "./pages/history";
 import { Analytics } from "./pages/analytics";
 import { Settings } from "./pages/settings";
+import { RouteError } from "./pages/route-error";
 
 const basename =
   import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
@@ -17,6 +19,7 @@ export const router = createBrowserRouter(
   [
     {
       Component: RootLayout,
+      errorElement: createElement(RouteError),
       children: [
         { path: "/", Component: Landing },
         { path: "/register", Component: Register },
@@ -27,6 +30,7 @@ export const router = createBrowserRouter(
         { path: "/history", Component: History },
         { path: "/analytics", Component: Analytics },
         { path: "/settings", Component: Settings },
+        { path: "*", Component: RouteError },
       ],
     },
   ],

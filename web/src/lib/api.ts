@@ -1,6 +1,10 @@
 const _rawBase = import.meta.env.VITE_API_BASE
-const API_BASE =
-  typeof _rawBase === 'string' && _rawBase.trim() !== '' ? _rawBase.trim() : 'http://localhost:8000'
+const API_BASE = (
+  typeof _rawBase === 'string' && _rawBase.trim() !== ''
+    ? _rawBase.trim()
+    : 'http://localhost:8000'
+).replace(/\/+$/, '')
+const REQUEST_TIMEOUT_MS = 20_000
 
 /** Thrown for non-OK API responses; use `status === 401` for expired/invalid auth. */
 export class HttpApiError extends Error {
@@ -10,6 +14,29 @@ export class HttpApiError extends Error {
   ) {
     super(message)
     this.name = 'HttpApiError'
+  }
+}
+
+/** The API could not be reached at all (server stopped, unavailable, or network interrupted). */
+export class ApiConnectionError extends Error {
+  constructor(message = 'Cannot reach the Asklytics API.') {
+    super(message)
+    this.name = 'ApiConnectionError'
+  }
+}
+
+async function apiFetch(path: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal })
+  } catch (error) {
+    const detail = error instanceof DOMException && error.name === 'AbortError'
+      ? 'The API took too long to respond. Please try again.'
+      : `Cannot connect to the API at ${API_BASE}. Start the backend service and try again.`
+    throw new ApiConnectionError(detail)
+  } finally {
+    window.clearTimeout(timer)
   }
 }
 
@@ -41,22 +68,22 @@ export type RegisterPayload = {
 }
 
 export async function register(payload: RegisterPayload) {
-  const res = await fetch(`${API_BASE}/api/v1/auth/register`, {
+  const res = await apiFetch('/api/v1/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(await res.text())
+  await throwIfNotOk(res)
   return res.json() as Promise<{ message: string; email: string; username: string }>
 }
 
 export async function login(email_or_username: string, password: string) {
-  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+  const res = await apiFetch('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email_or_username, password }),
   })
-  if (!res.ok) throw new Error(await res.text())
+  await throwIfNotOk(res)
   return res.json() as Promise<{ access_token: string; token_type: string }>
 }
 
@@ -75,7 +102,7 @@ export async function ingestImage(company: string, file: File, token: string) {
   const form = new FormData()
   form.append('company', company)
   form.append('file', file)
-  const res = await fetch(`${API_BASE}/api/v1/ingest/image`, {
+  const res = await apiFetch('/api/v1/ingest/image', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form,
@@ -97,7 +124,7 @@ export async function ingestPdf(company: string, file: File, token: string) {
   const form = new FormData()
   form.append('company', company)
   form.append('file', file)
-  const res = await fetch(`${API_BASE}/api/v1/ingest/pdf`, {
+  const res = await apiFetch('/api/v1/ingest/pdf', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form,
@@ -107,7 +134,7 @@ export async function ingestPdf(company: string, file: File, token: string) {
 }
 
 export async function ask(question: string, token: string) {
-  const res = await fetch(`${API_BASE}/api/v1/ask`, {
+  const res = await apiFetch('/api/v1/ask', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -123,4 +150,26 @@ export async function ask(question: string, token: string) {
     rows: Array<Record<string, unknown>>
     visualization_data?: Array<Record<string, unknown>>
   }>
+}
+
+export type RevenueForecastResult = {
+  periods_used: string[]
+  values_used: number[]
+  predicted_value: number
+  predicted_period_hint: string | null
+  training_loss_mse: number
+  epochs: number
+  window: number
+}
+
+export async function getRevenueForecast(token: string, company?: string, window = 4) {
+  const params = new URLSearchParams()
+  if (company) params.set('company', company)
+  params.set('window', String(window))
+  const res = await apiFetch(`/api/v1/ml/revenue-forecast?${params.toString()}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  await throwIfNotOk(res)
+  return res.json() as Promise<RevenueForecastResult>
 }

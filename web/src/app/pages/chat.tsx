@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Navbar } from "../components/navbar";
 import { useMotionPageEffects } from "../hooks/use-motion-page-effects";
-import { Send, User, Sparkles, Copy, Check, Upload, Download, X } from "lucide-react";
+import { Send, User, Sparkles, Copy, Check, Upload, Download, X, ArrowRight } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useData } from "../contexts/data-context";
 import { useHistory } from "../contexts/history-context";
@@ -10,6 +10,10 @@ import { parseFile } from "../utils/file-parser";
 import { ingestRowsToUploadedData } from "../utils/ingest-to-uploaded-data";
 import { HttpApiError, ask as apiAsk, ingestImage, ingestPdf } from "@/lib/api";
 import { getToken, setToken } from "@/lib/auth";
+import { KPICard } from "../components/kpi-card";
+import { InsightPanel } from "../components/insight-panel";
+import { EnhancedChart } from "../components/enhanced-chart";
+import type { EnhancedAskResponse, KPICard as KPICardType, Visualization, Insight } from "../types/data";
 
 function formatApiErrorForChat(err: unknown): string {
   if (err instanceof HttpApiError && err.status === 401) {
@@ -32,12 +36,18 @@ interface Message {
   sql?: string;
   table?: Array<Record<string, any>>;
   chartData?: Array<Record<string, any>>;
-  chartType?: "line" | "bar" | "multi-line" | "multi-bar"; // NEW: specify chart type
-  /** When set, chart tooltips show % not currency (e.g. profit_margin_pct). */
+  chartType?: "line" | "bar" | "multi-line" | "multi-bar";
   chartValueFormat?: "percent" | "currency";
-  insight?: string; // NEW: AI-generated insight
-  metrics?: string[]; // NEW: metrics being displayed
+  insight?: string;
+  metrics?: string[];
   imageIngestMeta?: ImageIngestMeta;
+  // Enhanced fields
+  kpis?: KPICardType[];
+  visualizations?: Visualization[];
+  insights?: Insight[];
+  currency?: string | null;
+  follow_up_suggestions?: string[];
+  limitations?: string[];
 }
 
 function metricCellClass(metricVal: unknown): string {
@@ -140,11 +150,10 @@ function findPercentSeriesKey(row: Record<string, unknown>): string | null {
 }
 
 /**
- * `/ask` returns flat SQL rows. Single-metric charts use `name` + `sales` (CSV/query-executor shape).
- * Compare queries return `revenue` + `expenses`; we must emit both as numbers or multi-series charts
- * only show the first metric (revenue) and look "the same" as revenue-only trends.
+ * `/ask` returns flat SQL rows. Legacy function now handled by backend visualizations.
+ * Kept for backward compatibility with local CSV processing.
  */
-function buildChartSpecFromServerRows(rows: Array<Record<string, unknown>>): {
+function _buildChartSpecFromServerRows(rows: Array<Record<string, unknown>>): {
   chartData: Array<Record<string, unknown>>;
   chartType: "line" | "bar" | "multi-line" | "multi-bar";
   chartValueFormat?: "percent" | "currency";
@@ -328,139 +337,8 @@ export function Chat() {
     return () => cancelAnimationFrame(t);
   }, [messages]);
 
-  const generateResponse = (userInput: string): Omit<Message, "id"> => {
-    const lowerInput = userInput.toLowerCase();
-
-    // Loss/Expense related questions
-    if (lowerInput.includes("loss") || lowerInput.includes("losses") || lowerInput.includes("expense")) {
-      return {
-        type: "ai",
-        content: "Here are the loss/expense results for the last financial year:",
-        sql: `SELECT \n  category, \n  SUM(amount) as total_loss,\n  COUNT(transaction_id) as transaction_count\nFROM expenses\nWHERE fiscal_year = '2025'\n  AND type = 'loss'\nGROUP BY category\nORDER BY total_loss DESC\nLIMIT 5;`,
-        table: [
-          { category: "Operating Costs", total_loss: "$128,450", transaction_count: 342 },
-          { category: "Marketing", total_loss: "$98,720", transaction_count: 215 },
-          { category: "Returns & Refunds", total_loss: "$67,230", transaction_count: 456 },
-          { category: "Inventory Writeoff", total_loss: "$45,890", transaction_count: 89 },
-          { category: "Damaged Goods", total_loss: "$32,150", transaction_count: 127 },
-        ],
-        chartData: [
-          { name: "Operating Costs", sales: 128450 },
-          { name: "Marketing", sales: 98720 },
-          { name: "Returns", sales: 67230 },
-          { name: "Writeoff", sales: 45890 },
-          { name: "Damaged", sales: 32150 },
-        ],
-        chartType: "bar",
-        insight: "Operating Costs is the largest expense category at $128,450 (35.2% of total expenses), followed by Marketing at $98,720. Total expenses across all categories amount to $372,440. Damaged Goods shows the fewest transactions (127), suggesting good inventory management.",
-        metrics: ["total_loss"],
-      };
-    }
-
-    // Profit related questions
-    if (lowerInput.includes("profit") || lowerInput.includes("margin")) {
-      return {
-        type: "ai",
-        content: "Here are the profit margins by product category:",
-        sql: `SELECT \n  category,\n  SUM(revenue - cost) as net_profit,\n  ROUND(((SUM(revenue - cost) / SUM(revenue)) * 100), 2) as profit_margin\nFROM transactions\nWHERE date >= '2025-01-01' AND date <= '2025-12-31'\nGROUP BY category\nORDER BY net_profit DESC;`,
-        table: [
-          { category: "Electronics", net_profit: "$234,560", profit_margin: "28.5%" },
-          { category: "Clothing", net_profit: "$189,340", profit_margin: "32.1%" },
-          { category: "Home Goods", net_profit: "$156,780", profit_margin: "25.8%" },
-          { category: "Sports", net_profit: "$98,450", profit_margin: "22.4%" },
-          { category: "Books", net_profit: "$67,230", profit_margin: "18.9%" },
-        ],
-        chartData: [
-          { name: "Electronics", sales: 234560 },
-          { name: "Clothing", sales: 189340 },
-          { name: "Home Goods", sales: 156780 },
-          { name: "Sports", sales: 98450 },
-          { name: "Books", sales: 67230 },
-        ],
-        chartType: "bar",
-        insight: "Electronics leads with $234,560 net profit despite having a lower margin (28.5%) compared to Clothing's 32.1%. Total profit across all categories is $746,360. Clothing shows the highest profit margin at 32.1%, while Books has the lowest at 18.9%, indicating potential areas for pricing optimization.",
-        metrics: ["net_profit"],
-      };
-    }
-
-    // Customer/User related questions
-    if (lowerInput.includes("customer") || lowerInput.includes("user") || lowerInput.includes("client")) {
-      return {
-        type: "ai",
-        content: "Here are the top customers by total purchases:",
-        sql: `SELECT \n  customer_name,\n  COUNT(order_id) as total_orders,\n  SUM(order_amount) as total_spent\nFROM orders\nWHERE date >= '2026-01-01'\nGROUP BY customer_name\nORDER BY total_spent DESC\nLIMIT 5;`,
-        table: [
-          { customer_name: "Acme Corp", total_orders: 156, total_spent: "$567,890" },
-          { customer_name: "TechStart Inc", total_orders: 142, total_spent: "$489,230" },
-          { customer_name: "Global Solutions", total_orders: 128, total_spent: "$445,670" },
-          { customer_name: "Innovation Labs", total_orders: 98, total_spent: "$378,450" },
-          { customer_name: "Future Dynamics", total_orders: 87, total_spent: "$298,120" },
-        ],
-        chartData: [
-          { name: "Acme Corp", sales: 567890 },
-          { name: "TechStart", sales: 489230 },
-          { name: "Global Sol.", sales: 445670 },
-          { name: "Innovation", sales: 378450 },
-          { name: "Future Dyn.", sales: 298120 },
-        ],
-        chartType: "bar",
-        insight: "Acme Corp is the highest-value customer with $567,890 in purchases across 156 orders. The top 5 customers contributed $2,179,360 in total revenue. Acme Corp's average order value is $3,640, suggesting strong engagement. There's an 48% revenue gap between the top customer and the 5th customer.",
-        metrics: ["total_spent"],
-      };
-    }
-
-    // Revenue/Growth related questions
-    if (lowerInput.includes("revenue") || lowerInput.includes("growth") || lowerInput.includes("trend")) {
-      return {
-        type: "ai",
-        content: "Here is the monthly revenue trend:",
-        sql: `SELECT \n  DATE_FORMAT(date, '%Y-%m') as month,\n  SUM(revenue) as monthly_revenue,\n  COUNT(DISTINCT customer_id) as unique_customers\nFROM transactions\nWHERE date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)\nGROUP BY month\nORDER BY month ASC;`,
-        table: [
-          { month: "2025-07", monthly_revenue: "$342,560", unique_customers: 1245 },
-          { month: "2025-08", monthly_revenue: "$378,920", unique_customers: 1389 },
-          { month: "2025-09", monthly_revenue: "$421,340", unique_customers: 1502 },
-          { month: "2025-10", monthly_revenue: "$456,780", unique_customers: 1634 },
-          { month: "2025-11", monthly_revenue: "$489,450", unique_customers: 1758 },
-          { month: "2025-12", monthly_revenue: "$523,890", unique_customers: 1892 },
-        ],
-        chartData: [
-          { name: "Jul", sales: 342560 },
-          { name: "Aug", sales: 378920 },
-          { name: "Sep", sales: 421340 },
-          { name: "Oct", sales: 456780 },
-          { name: "Nov", sales: 489450 },
-          { name: "Dec", sales: 523890 },
-        ],
-        chartType: "line",
-        insight: "Revenue shows consistent upward growth from July to December 2025, with total revenue of $2,613,940 over 6 months. December is the best performing month with $523,890 (+52.9% vs July). Average monthly growth rate is 8.9%, indicating strong business momentum. Customer base grew by 52% from 1,245 to 1,892, suggesting effective customer acquisition.",
-        metrics: ["monthly_revenue"],
-      };
-    }
-
-    // Default: Sales related questions
-    return {
-      type: "ai",
-      content: "Here are your sales results:",
-      sql: `SELECT \n  product_name, \n  SUM(sales_amount) as total_sales,\n  COUNT(order_id) as order_count\nFROM sales\nWHERE date >= '2026-01-01'\nGROUP BY product_name\nORDER BY total_sales DESC\nLIMIT 5;`,
-      table: [
-        { product_name: "Product A", total_sales: "$45,230", order_count: 234 },
-        { product_name: "Product B", total_sales: "$38,920", order_count: 189 },
-        { product_name: "Product C", total_sales: "$32,150", order_count: 156 },
-        { product_name: "Product D", total_sales: "$28,470", order_count: 143 },
-        { product_name: "Product E", total_sales: "$24,890", order_count: 128 },
-      ],
-      chartData: [
-        { name: "Product A", sales: 45230 },
-        { name: "Product B", sales: 38920 },
-        { name: "Product C", sales: 32150 },
-        { name: "Product D", sales: 28470 },
-        { name: "Product E", sales: 24890 },
-      ],
-      chartType: "bar",
-      insight: "Product A is the top performer with $45,230 in sales (26.7% of total), achieving this through 234 orders. Total sales across top 5 products is $169,660. Product A's average order value is $193, while Product E's is $194, indicating similar pricing despite different sales volumes. Consider focusing on Product A's successful strategies.",
-      metrics: ["total_sales"],
-    };
-  };
+  // REMOVED: generateResponse() function with hardcoded mock data
+  // All responses now come from the intelligent backend or local query executor
 
   const handleSend = async () => {
     const q = input.trim();
@@ -531,6 +409,68 @@ export function Chat() {
       }
     }
 
+    // PDF/image financial statements are already persisted in financial_facts.
+    // Send their questions through the backend smart planner so semantic language
+    // is normalized before deterministic financial SQL executes.
+    const serverFinancialFile =
+      !!token &&
+      !!uploadedFile &&
+      /\.(pdf|png|jpg|jpeg)$/i.test(uploadedFile.name);
+
+    if (serverFinancialFile) {
+      setInput("");
+      try {
+        const res = await apiAsk(q, token!) as EnhancedAskResponse;
+        const table = (res.table || res.rows || []) as Array<Record<string, any>>;
+        
+        // Build response from enhanced backend
+        const responseData: Omit<Message, "id"> = {
+          type: "ai",
+          content: ingestPrefix + (res.answer_text || res.explanation || "Here are your results."),
+          sql: res.sql || undefined,
+          table: table.length > 0 ? table : undefined,
+          kpis: res.kpis || undefined,
+          visualizations: res.visualizations || undefined,
+          insights: res.insights || undefined,
+          currency: res.currency,
+          follow_up_suggestions: res.follow_up_suggestions || undefined,
+          limitations: res.limitations || undefined,
+          imageIngestMeta: imageMeta,
+          // Legacy fallback for old frontend code
+          chartData: res.visualization_data,
+          insight: res.insights?.[0]?.content,
+        };
+
+        setMessages((prev) => {
+          const uid = nextMessageId(prev);
+          return [...prev, { id: uid, type: "user", content: q }, { id: uid + 1, ...responseData }];
+        });
+
+        if (res.sql && table.length) {
+          addToHistory({
+            question: q,
+            sql: res.sql,
+            result: {
+              table,
+              chartData: res.visualization_data ?? [],
+              message: responseData.content,
+            },
+          });
+        }
+      } catch (err) {
+        const msg = formatApiErrorForChat(err);
+        setMessages((prev) => {
+          const uid = nextMessageId(prev);
+          return [
+            ...prev,
+            { id: uid, type: "user", content: q },
+            { id: uid + 1, type: "ai", content: `Error: ${msg}` },
+          ];
+        });
+      }
+      return;
+    }
+
     if (cols.length > 0) {
       console.log("🔍 Executing query with data:", {
         input: q,
@@ -586,32 +526,39 @@ export function Chat() {
     if (token) {
       setInput("");
       try {
-        const res = await apiAsk(q, token);
-        const table = (res.rows ?? []) as Array<Record<string, any>>;
-        const chartSpec = buildChartSpecFromServerRows(table as Array<Record<string, unknown>>);
+        const res = await apiAsk(q, token) as EnhancedAskResponse;
+        const table = (res.table || res.rows || []) as Array<Record<string, any>>;
+        
         const responseData: Omit<Message, "id"> = {
           type: "ai",
-          content: res.explanation || "Here are your results.",
-          sql: res.sql,
-          table,
-          chartData: chartSpec?.chartData,
-          chartType: chartSpec?.chartType,
-          chartValueFormat: chartSpec?.chartValueFormat,
-          insight: res.explanation,
+          content: res.answer_text || res.explanation || "Here are your results.",
+          sql: res.sql || undefined,
+          table: table.length > 0 ? table : undefined,
+          kpis: res.kpis || undefined,
+          visualizations: res.visualizations || undefined,
+          insights: res.insights || undefined,
+          currency: res.currency,
+          follow_up_suggestions: res.follow_up_suggestions || undefined,
+          limitations: res.limitations || undefined,
+          // Legacy fallback
+          chartData: res.visualization_data,
+          insight: res.insights?.[0]?.content,
         };
+
         setMessages((prev) => {
           const uid = nextMessageId(prev);
           const aiMessage: Message = { id: uid + 1, ...responseData };
           return [...prev, { id: uid, type: "user", content: q }, aiMessage];
         });
+
         if (res.sql && table.length) {
           addToHistory({
             question: q,
             sql: res.sql,
             result: {
               table,
-              chartData: chartSpec?.chartData ?? [],
-              message: res.explanation,
+              chartData: res.visualization_data ?? [],
+              message: res.answer_text || res.explanation || "",
             },
           });
         }
@@ -629,26 +576,22 @@ export function Chat() {
       return;
     }
 
-    // 3) Loaded flag set but no sheets (edge): original mock branch
-    if (isDataLoaded) {
-      console.log("⚠️ Using mock data (no sheet rows)");
-      const responseData = generateResponse(q);
+    // No data loaded and not authenticated - inform user
+    if (!canChat) {
       setMessages((prev) => {
         const uid = nextMessageId(prev);
-        return [...prev, { id: uid, type: "user", content: q }, { id: uid + 1, ...responseData }];
+        return [
+          ...prev,
+          { id: uid, type: "user", content: q },
+          {
+            id: uid + 1,
+            type: "ai",
+            content:
+              "Please either login to use the intelligent financial analytics engine, or upload a CSV/Excel file to analyze your data locally.",
+          },
+        ];
       });
       setInput("");
-      if (responseData.sql && responseData.table) {
-        addToHistory({
-          question: q,
-          sql: responseData.sql,
-          result: {
-            table: responseData.table,
-            chartData: responseData.chartData || [],
-            message: responseData.content,
-          },
-        });
-      }
     }
   };
 
@@ -1299,9 +1242,79 @@ export function Chat() {
                       </div>
                     )}
 
-                    {/* AI Insight when there is table or chart output */}
-                    {((message.table && message.table.length > 0) ||
-                      (message.chartData && message.chartData.length > 0)) && (
+                    {/* KPI Cards */}
+                    {message.kpis && message.kpis.length > 0 && (
+                      <div className="space-y-3">
+                        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                          📊 Key Metrics
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {message.kpis.map((kpi, index) => (
+                            <KPICard key={index} kpi={kpi} currency={message.currency} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Enhanced Visualizations */}
+                    {message.visualizations && message.visualizations.length > 0 && (
+                      <div className="space-y-4">
+                        {message.visualizations.map((viz, index) => (
+                          <div
+                            key={index}
+                            className="bg-card border border-border rounded-xl p-4 sm:p-6"
+                          >
+                            <EnhancedChart visualization={viz} currency={message.currency} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* AI Insights */}
+                    {message.insights && message.insights.length > 0 && (
+                      <InsightPanel insights={message.insights} />
+                    )}
+
+                    {/* Follow-up Suggestions */}
+                    {message.follow_up_suggestions && message.follow_up_suggestions.length > 0 && (
+                      <div className="space-y-3">
+                        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                          🔍 Suggested Follow-ups
+                        </h3>
+                        <div className="flex flex-wrap gap-2">
+                          {message.follow_up_suggestions.map((suggestion, index) => (
+                            <button
+                              key={index}
+                              onClick={() => setInput(suggestion)}
+                              className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-muted dark:text-gray-300"
+                            >
+                              <ArrowRight className="h-3 w-3" />
+                              {suggestion}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Limitations Warning */}
+                    {message.limitations && message.limitations.length > 0 && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/20">
+                        <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                          ⚠️ Data Limitations
+                        </p>
+                        <ul className="mt-2 space-y-1 text-sm text-amber-800 dark:text-amber-200">
+                          {message.limitations.map((limitation, index) => (
+                            <li key={index}>• {limitation}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Legacy AI Insight (fallback for old responses) */}
+                    {!message.insights &&
+                      message.insight &&
+                      ((message.table && message.table.length > 0) ||
+                        (message.chartData && message.chartData.length > 0)) && (
                       <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950/30 dark:to-emerald-950/30 border-2 border-green-200 dark:border-green-800 rounded-xl px-4 sm:px-6 py-5 shadow-sm min-w-0 max-w-full overflow-hidden">
                         <div className="flex items-start gap-3 min-w-0">
                           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center flex-shrink-0">
@@ -1312,7 +1325,7 @@ export function Chat() {
                               💡 Key Insights
                             </h3>
                             <p className="text-sm leading-relaxed text-gray-700 dark:text-gray-300 break-words [overflow-wrap:anywhere]">
-                              {message.insight || "Analysis complete. Review the data above for detailed results."}
+                              {message.insight}
                             </p>
                           </div>
                         </div>

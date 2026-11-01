@@ -1,26 +1,100 @@
+# ==========================================
+# Python & Virtual Environments
+# ==========================================
 .venv/
-node_modules/
+venv/
+env/
 __pycache__/
+*.py[cod]
 *.pyc
-.env
-.DS_Store
-*.db
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# Node.js & Frontend Build
+# ==========================================
+node_modules/
 dist/
 build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-# Local debug / OCR test output (regenerate as needed)
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+secrets/
+
+# ==========================================
+# Databases & Local Data
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ==========================================
+# Logs & Debug Output
+# ==========================================
+*.log
+logs/
 debug_output/
+temp/
+tmp/
+cache/
+.cache/
 
-# Archives not needed in version control
+# ==========================================
+# Generated Test Reports
+# ==========================================
+transformation_test_report.txt
+test-results/
+coverage/
+
+# ==========================================
+# Archives
+# ==========================================
 *.zip
 
-# FinBERT fine-tuned weights (run: PYTHONPATH=backend python -m app.ml.train_classifier)
+# ==========================================
+# AI / ML Model Artifacts
+# ==========================================
+
+# FinBERT fine-tuned weights
+# Regenerate using:
+# PYTHONPATH=backend python -m app.ml.train_classifier
 backend/app/ml/model/
 
-# LayoutLM: training checkpoints + weight files (often 100MB+; exceeds GitHub single-file limit)
+# LayoutLM checkpoints and weights
 backend/app/ml/layout_model_trained/checkpoints/
 backend/app/ml/layout_model_trained/**/*.safetensors
 backend/app/ml/layout_model_trained/**/*.pt
 backend/app/ml/layout_model_trained/**/*.pth
 backend/app/ml/layout_model_trained/**/*.bin
+
+# Other large model files
+*.safetensors
+*.onnx
+
+# ==========================================
+# IDE & Operating System
+# ==========================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.zed/
+
+# ==========================================
+# Temporary / Accidental Files
+# ==========================================
+/witch main
